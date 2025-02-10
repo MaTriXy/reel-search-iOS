@@ -88,8 +88,8 @@ open class CollectionViewWrapper
     let collectionLayout = RAMCollectionViewLayout()
     let scrollDelegate: ScrollViewDelegate
     
-    let rotationWrapper = NotificationCallbackWrapper(name: NSNotification.Name.UIDeviceOrientationDidChange.rawValue, object: UIDevice.current)
-    let keyboardWrapper = NotificationCallbackWrapper(name: NSNotification.Name.UIKeyboardDidChangeFrame.rawValue)
+    let rotationWrapper = NotificationCallbackWrapper(name: UIDevice.orientationDidChangeNotification.rawValue, object: UIDevice.current)
+    let keyboardWrapper = NotificationCallbackWrapper(name: UIResponder.keyboardDidChangeFrameNotification.rawValue)
     
     var theme: Theme
     
@@ -103,8 +103,22 @@ open class CollectionViewWrapper
         self.theme = theme
         
         self.scrollDelegate = ScrollViewDelegate(itemHeight: collectionLayout.itemHeight)
-        
-        self.scrollDelegate.itemIndexChangeCallback = indexCallback
+        self.scrollDelegate.itemIndexChangeCallback = { [weak self] idx in
+          guard let `self` = self else { return }
+          guard let index = idx , 0 <= index && index < self.data.count else {
+            self.selectedItem = nil
+            return
+          }
+          
+          let item = self.data[index]
+          self.selectedItem = item
+          
+          // TODO: Update cell appearance maybe?
+          // Toggle selected?
+          let indexPath = IndexPath(item: index, section: 0)
+          let cell = collectionView.cellForItem(at: indexPath)
+          cell?.isSelected = true
+        }
         
         collectionView.register(CellClass.self, forCellWithReuseIdentifier: cellId)
         
@@ -138,24 +152,8 @@ open class CollectionViewWrapper
     }
     
     var selectedItem: DataType?
-    func indexCallback(_ idx: Int?) {
-        guard let index = idx , 0 <= index && index < data.count else {
-            selectedItem = nil
-            return
-        }
-        
-        let item = data[index]
-        selectedItem = item
-        
-        // TODO: Update cell appearance maybe?
-        // Toggle selected?
-        let indexPath = IndexPath(item: index, section: 0)
-        let cell = collectionView.cellForItem(at: indexPath)
-        cell?.isSelected = true
-    }
-    
+
     // MARK Implementation of WrapperProtocol
-    
     func createCell(_ collectionView: UICollectionView, indexPath: IndexPath) -> UICollectionViewCell {
         var cell = collectionView.dequeueReusableCell(withReuseIdentifier: cellId, for: indexPath) as! CellClass
         
@@ -184,7 +182,7 @@ open class CollectionViewWrapper
     // MARK: Update & Adjust
     
     func updateOffset(_ notification: Notification? = nil) {
-        let durationNumber = (notification as NSNotification?)?.userInfo?[UIKeyboardAnimationDurationUserInfoKey] as? NSNumber
+        let durationNumber = (notification as NSNotification?)?.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber
         let duration = durationNumber?.doubleValue ?? 0.1
         
         UIView.animate(withDuration: duration, animations: {
@@ -256,21 +254,29 @@ class ScrollViewDelegate: NSObject, UIScrollViewDelegate {
         
         let scrollDirection = ScrollDirection.scrolledWhere(scrollFrom, scrollTo)
         let itemIndex: Int
-        if scrollDirection == .up {
+        
+        switch scrollDirection {
+        case .noScroll:
+            itemIndex = Int(floatIndex)
+        case .up:
             itemIndex = Int(floor(floatIndex))
-        }
-        else {
+        case .down:
             itemIndex = Int(ceil(floatIndex))
         }
-        
-        let adjestedOffsetY = CGFloat(itemIndex) * itemHeight - inset
         
         if itemIndex >= 0 {
             self.itemIndex = itemIndex
         }
         
+        // Perform no animation if no scroll is needed
+        if case .noScroll = scrollDirection {
+            return
+        }
+        
+        let adjestedOffsetY = CGFloat(itemIndex) * itemHeight - inset
+        
         // Difference between actual and designated position in pixels
-        let Δ = fabs(scrollView.contentOffset.y - adjestedOffsetY)
+        let Δ = abs(scrollView.contentOffset.y - adjestedOffsetY)
         // Allowed differenct between actual and designated position in pixels
         let ε:CGFloat = 0.5
         
@@ -278,7 +284,7 @@ class ScrollViewDelegate: NSObject, UIScrollViewDelegate {
         if Δ > ε {            
             UIView.animate(withDuration: 0.25,
                 delay: 0.0,
-                options: UIViewAnimationOptions.curveEaseOut,
+                options: UIView.AnimationOptions.curveEaseOut,
                 animations: {
                     let newOffset = CGPoint(x: 0, y: adjestedOffsetY)
                     scrollView.contentOffset = newOffset
